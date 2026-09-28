@@ -20,6 +20,7 @@
 
 pub(crate) mod bc;
 pub(crate) mod compiler;
+pub(crate) mod effects;
 mod params;
 pub(crate) mod runtime;
 pub(crate) mod soft_error;
