@@ -1104,27 +1104,150 @@ for i in range(5):
         b()
 ```
 
-Assume `a` contributes effect `A` and `b` contributes effect `B`. At event
-granularity:
+Assume `a` contributes effect `A` and `b` contributes effect `B`. The primary
+representation should be an indexed family of dynamic effect occurrences, not
+a set in which equal effect payloads are deduplicated.
+
+Use a fresh iteration ordinal `k` and define the source variable as the value
+produced by that iteration:
 
 ```text
-A(iteration=i) when i in range(5) AND i < 2
-B(iteration=i) when i in range(5) AND NOT (i < 2)
+k in Iterations(range(5))
+i[k] = Element(range(5), k)
+
+A(i[k]) @ k when i[k] < 2
+B(i[k]) @ k when NOT (i[k] < 2)
 ```
 
-At function granularity, the iteration variable is existentially quantified:
+For `range(5)`, `k` and `i[k]` happen to be equal. They are not interchangeable
+in general:
+
+```python
+for x in [1, 1]:
+    a()
+```
+
+has two effect occurrences even though both iterations give `x` the value `1`.
+Their identities are `A@0` and `A@1`. For nested loops, an occurrence identity
+contains an iteration vector such as `(outer_k, inner_k)`.
+
+#### Existential projection
+
+Existential qualification is not part of the primary occurrence
+representation. It is used to answer the derived Boolean question:
+
+> Can at least one occurrence of this effect happen?
+
+For `A`, that query is:
+
+```text
+MayEffect(A) when
+    EXISTS k:
+        k in Iterations(range(5))
+        AND i[k] < 2
+```
+
+Equivalently, using `i` as shorthand for this simple range loop:
 
 ```text
 MayEffect(A) when EXISTS i: i in range(5) AND i < 2
-MayEffect(B) when EXISTS i: i in range(5) AND NOT (i < 2)
 ```
 
-Both predicates simplify to `true`. If multiplicity is retained, `a` is called
-twice and `b` three times, assuming every preceding operation completes
-normally.
+This does not ask whether the source variable `i` exists. It asks whether there
+is at least one iteration value satisfying both conditions. The loop may have
+no dynamic iteration at all:
 
-That final qualification matters. If calls may fail, reaching later iterations
-also requires earlier iterations to complete normally. After unrolling:
+```text
+EXISTS i: i in range(0)
+```
+
+is false. In the concrete `range(5)` example, `0` and `1` are witnesses, so the
+may-effect predicate simplifies to `true`.
+
+For an input-dependent loop:
+
+```python
+def f(n):
+    for i in range(n):
+        if i < 2:
+            a()
+```
+
+`n` remains free in the function summary while the internal iteration identity
+is bound:
+
+```text
+MayEffect(A)(n) = EXISTS k:
+    0 <= k < n
+    AND k < 2
+```
+
+assuming normal range semantics, this simplifies to `n > 0`. Existential
+projection hides the internal occurrence identity while retaining a predicate
+over function inputs.
+
+Different questions use different projections. Given an occurrence predicate
+`P(k)`:
+
+```text
+may occur at least once:  EXISTS k: P(k)
+never occurs:             NOT EXISTS k: P(k)
+occurs every iteration:   FOR ALL k in Iterations(loop): P(k)
+occurs exactly n times:   CARDINALITY { k | P(k) } = n
+```
+
+The universal statement is vacuously true for an empty loop, so it does not by
+itself imply that the effect occurs.
+
+#### Multiplicity
+
+The multiplicity of an effect family on one execution is the cardinality of its
+satisfying occurrence identities:
+
+```text
+Count(A) = CARDINALITY { k | domain(k) AND guard_A(k) }
+```
+
+or equivalently:
+
+```text
+Count(A) = SUM k: indicator(domain(k) AND guard_A(k))
+```
+
+For the example, ignoring failure:
+
+```text
+Count(A) = 2
+Count(B) = 3
+```
+
+For:
+
+```python
+def f(n):
+    for i in range(n):
+        if i < 2:
+            a()
+```
+
+on normal completion:
+
+```text
+Count(A) = CARDINALITY { i | 0 <= i < n AND i < 2 }
+         = min(max(n, 0), 2)
+```
+
+The may-effect query is just `Count(A) > 0`. It is therefore a deliberately
+lossy projection of the multiplicity information.
+
+Multiplicity is relative to the effect pattern being counted. For
+`emit(0); emit(1)`, the count of `Emit(_)` is two while the count of `Emit(0)`
+is one. Equal payloads must also remain distinct: `tick(); tick()` contains two
+`Tick` occurrences.
+
+Failure makes multiplicity path-dependent because reaching iteration `k`
+requires earlier iterations to complete normally. After unrolling the original
+example, and assuming each effect is contributed upon entering its call:
 
 ```text
 A@0 when true
@@ -1133,9 +1256,48 @@ B@2 when normal(a@0) AND normal(a@1)
 B@3 when normal(a@0) AND normal(a@1) AND normal(b@2)
 ```
 
-A coarse may-effect analysis may omit this history when it is enough to know
-that there exists an execution in which earlier calls return normally. The
-result remains conservative, but its predicates are less informative.
+Possible counts may therefore differ between failing and normally completing
+executions. Counts should be guarded by completion predicates or represented as
+a set or interval of possible values. A coarse analysis may widen exact counts
+to forms such as `ZeroOrOne`, `OneOrMore`, `ZeroOrMore`, or a symbolic interval.
+
+A coarse may-effect analysis may omit prior-iteration history when it is enough
+to know that there exists an execution in which earlier operations complete
+normally. The result remains conservative, but its predicates and multiplicity
+are less informative.
+
+The function summary should therefore retain effect families until a consumer
+explicitly requests existential may-effect projection, cardinality, or another
+view. A tentative representation is:
+
+```rust
+pub(crate) struct EffectFamily {
+    /// Static source or IR site that contributes the effect.
+    pub site: EffectSiteId,
+
+    /// Dynamic loop ordinals that distinguish occurrences.
+    pub binders: Box<[IterationBinder]>,
+
+    /// Constraints such as `0 <= k < n`.
+    pub domain: PredicateId,
+
+    /// Effect payload, possibly parameterized by iteration values.
+    pub effect: Effect,
+
+    /// Path, continuation, and callee-effect conditions.
+    pub guard: PredicateId,
+}
+
+pub(crate) struct IterationBinder {
+    pub ordinal: SymbolId,
+    pub iterable: SymbolicValueId,
+    pub value: SymbolicValueId,
+}
+```
+
+An effect outside a loop is a family with no binders. A small constant loop may
+be unrolled into separate binder-free occurrences as an optimization, provided
+that occurrence identity and ordering are preserved.
 
 ### Early exit
 
@@ -1158,8 +1320,9 @@ AND FOR ALL j, 0 <= j < k:
     AND normal(write(j))
 ```
 
-The function-level may-effect existentially quantifies `k`. `continue`,
-`return`, and failure introduce similar history conditions.
+The derived function-level may-effect query existentially quantifies `k`; the
+primary effect family retains it. `continue`, `return`, and failure introduce
+similar history conditions.
 
 ### Loop-carried state
 
@@ -1302,22 +1465,33 @@ argument is `Phi(1 when truth(x), 2 when NOT truth(x))`.
 
 ## Proposed report shape
 
-The analyzer should retain occurrences before producing a merged summary:
+The analyzer should retain indexed effect families before producing a merged
+or existentially projected summary:
 
 ```rust
 pub(crate) struct EffectOccurrence {
+    pub site: EffectSiteId,
     pub effect: Effect,
     pub predicate: PredicateId,
     pub span: FrameSpan,
     pub function: FunctionId,
-    pub iteration: Box<[IterationBinding]>,
+    pub iteration: Box<[SymbolicValueId]>,
 }
 
 pub(crate) struct FunctionSummary {
+    /// Symbolic families, including iteration binders and their domains.
+    pub families: Vec<EffectFamily>,
+
+    /// Optional explicitly unrolled occurrences for reporting and small loops.
     pub occurrences: Vec<EffectOccurrence>,
+
     pub completions: Vec<GuardedCompletion>,
 }
 ```
+
+The may-effect set is a derived view that existentially projects the binders in
+`families`. Multiplicity is another derived view that counts satisfying binder
+assignments.
 
 A deterministic textual form is important for golden tests. For example:
 
