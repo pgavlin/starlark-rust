@@ -32,6 +32,7 @@ use clap::builder::TypedValueParser;
 use dupe::Dupe;
 use eval::Context;
 use itertools::Either;
+use starlark::StarlarkResultExt;
 use starlark::analysis::LintMessage;
 use starlark::docs::DocItem;
 use starlark::docs::markdown::render_doc_item_no_link;
@@ -40,6 +41,7 @@ use starlark::environment::Module;
 use starlark::errors::EvalMessage;
 use starlark::errors::EvalSeverity;
 use starlark::read_line::ReadLine;
+use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
 use suppression::GlobLintSuppression;
 use walkdir::WalkDir;
@@ -91,6 +93,21 @@ struct Args {
         conflicts_with_all = &["lsp", "dap"],
     )]
     check: bool,
+
+    #[arg(
+        long = "effects",
+        help = "Print the experimental effect analysis without executing code.",
+        conflicts_with_all = &["lsp", "dap", "check", "json", "docs", "prelude", "bazel"],
+    )]
+    effects: bool,
+
+    #[arg(
+        long = "effects-summaries",
+        value_name = "FILE",
+        help = "JSON call-summary registry for --effects.",
+        requires = "effects"
+    )]
+    effects_summaries: Option<PathBuf>,
 
     #[arg(
         long = "json",
@@ -284,6 +301,43 @@ fn main() -> anyhow::Result<()> {
         ArgsDialect::Standard => (Dialect::Standard, Globals::standard()),
         ArgsDialect::Extended => (Dialect::Extended, Globals::extended_internal()),
     };
+
+    if args.effects {
+        if args.evaluate.is_empty() && args.files.is_empty() {
+            return Err(anyhow::anyhow!(
+                "--effects requires an expression or source file"
+            ));
+        }
+        let ext = args
+            .extension
+            .as_ref()
+            .map_or("bzl", |x| x.strip_prefix('.').unwrap_or(x.as_str()));
+        let summaries = args
+            .effects_summaries
+            .as_ref()
+            .map(std::fs::read_to_string)
+            .transpose()?;
+        for (index, source) in args.evaluate.iter().enumerate() {
+            let filename = format!("<expression:{}>", index + 1);
+            let ast = AstModule::parse(&filename, source.clone(), &dialect).into_anyhow_result()?;
+            println!("== source {filename} ==");
+            print!(
+                "{}",
+                starlark::__effects_cli::analyze(ast, &globals, summaries.as_deref())
+                    .into_anyhow_result()?
+            );
+        }
+        for file in expand_dirs(ext, args.files.clone()) {
+            let ast = AstModule::parse_file(&file, &dialect).into_anyhow_result()?;
+            println!("== source {} ==", file.display());
+            print!(
+                "{}",
+                starlark::__effects_cli::analyze(ast, &globals, summaries.as_deref())
+                    .into_anyhow_result()?
+            );
+        }
+        return Ok(());
+    }
 
     if args.dap {
         dap::server(dialect, globals);

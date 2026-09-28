@@ -486,6 +486,28 @@ pub mod wasm;
 
 pub mod pagable;
 
+/// Unstable bridge for the repository's exploratory effects CLI.
+///
+/// The analyzer and all of its data types remain crate-private.
+#[cfg(feature = "effects-cli")]
+#[doc(hidden)]
+pub mod __effects_cli {
+    use crate::environment::Globals;
+    use crate::syntax::AstModule;
+
+    pub fn analyze(
+        ast: AstModule,
+        globals: &Globals,
+        summaries_json: Option<&str>,
+    ) -> crate::Result<String> {
+        let registry = match summaries_json {
+            Some(json) => crate::eval::effects::registry::SummaryRegistry::parse(json)?,
+            None => crate::eval::effects::registry::SummaryRegistry::default(),
+        };
+        crate::eval::effects::source::analyze_source(ast, globals, &registry)
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

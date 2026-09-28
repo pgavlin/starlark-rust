@@ -29,7 +29,7 @@ itertools.workspace = true
 lsp-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-starlark.workspace = true
+starlark = { workspace = true, features = ["effects-cli"] }
 starlark_lsp.workspace = true
 thiserror.workspace = true
 tower-lsp-server.workspace = true

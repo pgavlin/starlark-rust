@@ -56,6 +56,8 @@ rustyline.workspace = true
 
 [features]
 default = []
+# Private bridge used only by the repository's exploratory effects CLI.
+effects-cli = []
 pagable = []
 
 [lints.clippy]

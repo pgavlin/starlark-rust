@@ -521,6 +521,20 @@ pub(crate) struct DefCompiled<'f> {
     pub(crate) info: DefInfoValue<'f>,
 }
 
+impl<'f> DefCompiled<'f> {
+    pub(crate) fn name(&self) -> &str {
+        self.info.value.name.as_str()
+    }
+
+    pub(crate) fn body(&self) -> &StmtsCompiled<'f> {
+        &self.info.value.body_stmts
+    }
+
+    pub(crate) fn parameter_count(&self) -> u32 {
+        self.params.count_param_variables()
+    }
+}
+
 impl<'fm> Compiler<'_, '_, '_, '_, 'fm> {
     fn parameter_name(&mut self, ident: &CstAssignIdent<'fm>) -> ParameterName {
         let binding_id = ident.payload.expect("no binding for parameter");

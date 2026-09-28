@@ -17,7 +17,9 @@ pub(crate) mod completion;
 pub(crate) mod effect;
 pub(crate) mod flow;
 pub(crate) mod predicate;
+pub(crate) mod registry;
 mod report;
+pub(crate) mod source;
 
 #[cfg(test)]
 mod tests;

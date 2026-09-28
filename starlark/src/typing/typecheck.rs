@@ -217,6 +217,7 @@ impl AstModuleTypecheck for AstModule {
                         statement,
                         ScopeResolverGlobals {
                             globals: Some((globals, r.frozen_edge(frozen_heap))),
+                            extra_globals: None,
                         },
                         frozen_heap.alloc_simple_typed(StarlarkAny::new(codemap.dupe())),
                         &Dialect::AllOptionsInternal,

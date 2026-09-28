@@ -107,6 +107,7 @@ impl<'v, 'a, 'e> Evaluator<'v, 'a, 'e> {
                     statement,
                     ScopeResolverGlobals {
                         globals: Some((globals, gedge)),
+                        extra_globals: None,
                     },
                     codemap,
                     &dialect,

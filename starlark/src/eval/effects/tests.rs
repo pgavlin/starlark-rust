@@ -35,6 +35,7 @@ use crate::eval::effects::predicate::Predicate;
 use crate::eval::effects::predicate::PredicateAtom;
 use crate::eval::effects::predicate::PredicateInterner;
 use crate::eval::runtime::frame_span::FrameSpan;
+use crate::eval::runtime::slots::LocalCapturedSlotId;
 use crate::eval::runtime::slots::LocalSlotId;
 use crate::values::Value;
 
@@ -344,6 +345,57 @@ fn mutation_before_failure_is_guarded_by_entry_not_normal() {
     let result = analyzer.apply_summary(call_entry, &summary, &[]);
 
     assert_eq!(analyzer.predicates().true_(), result.effects[0].predicate);
+}
+
+#[test]
+fn captured_assignment_propagates_allocation_to_return() {
+    let span = FrameSpan::default();
+    let mut statements = StmtsCompiled::one(IrSpanned {
+        span,
+        node: StmtCompiled::Assign(
+            IrSpanned {
+                span,
+                node: crate::eval::compiler::stmt::AssignCompiledValue::LocalCaptured(
+                    LocalCapturedSlotId(0),
+                ),
+            },
+            None,
+            IrSpanned {
+                span,
+                node: ExprCompiled::List(Vec::new()),
+            },
+        ),
+    });
+    statements.extend(StmtsCompiled::one(IrSpanned {
+        span,
+        node: StmtCompiled::Return(IrSpanned {
+            span,
+            node: ExprCompiled::LocalCaptured(LocalCapturedSlotId(0)),
+        }),
+    }));
+
+    let result = Analyzer::default().analyze(&statements, 0);
+
+    assert!(matches!(
+        &result.flow.effects[0].effect,
+        Effect::WriteCaptured {
+            value: SymbolicValue {
+                regions: RegionSet::Objects(objects),
+                ..
+            },
+            ..
+        } if objects.contains(&AbstractObject::Allocation(0))
+    ));
+    assert!(matches!(
+        &result.flow.abrupt[0].completion,
+        AbruptCompletion::Return {
+            value: SymbolicValue {
+                expression: SymbolicExpression::Captured(0, 1),
+                regions: RegionSet::Objects(objects),
+            },
+            ..
+        } if objects.contains(&AbstractObject::Allocation(0))
+    ));
 }
 
 #[test]

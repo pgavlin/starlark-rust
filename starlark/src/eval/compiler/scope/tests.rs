@@ -68,6 +68,7 @@ fn test_with_module<'f>(
                 ast.into_parts().1,
                 ScopeResolverGlobals {
                     globals: Some((globals, r.frozen_edge(frozen_heap))),
+                    extra_globals: None,
                 },
                 codemap,
                 &Dialect::AllOptionsInternal,

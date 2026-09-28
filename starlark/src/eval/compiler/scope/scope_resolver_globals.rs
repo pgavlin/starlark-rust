@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+use std::collections::HashMap;
+
 use crate::const_frozen_string;
 use crate::environment::GlobalsData;
 use crate::values::HeapEdge;
@@ -25,14 +27,22 @@ use crate::values::Value;
 pub(crate) struct ScopeResolverGlobals<'a, 'f, 'g> {
     /// None if unknown.
     pub(crate) globals: Option<(&'a GlobalsData<'g>, HeapEdge<'f, 'g>)>,
+    /// Analysis-only globals that override ordinary globals during name resolution.
+    pub(crate) extra_globals: Option<&'a HashMap<String, Value<'f>>>,
 }
 
 impl<'a, 'f, 'g> ScopeResolverGlobals<'a, 'f, 'g> {
     pub(crate) fn unknown() -> Self {
-        ScopeResolverGlobals { globals: None }
+        ScopeResolverGlobals {
+            globals: None,
+            extra_globals: None,
+        }
     }
 
     pub(crate) fn get_global(&self, name: &str) -> Option<Value<'f>> {
+        if let Some(value) = self.extra_globals.and_then(|globals| globals.get(name)) {
+            return Some(*value);
+        }
         match self.globals {
             Some((globals, edge)) => Some(edge.rebrand(globals.variables.get_str(name)?.value)),
             None => Some(const_frozen_string!("unknown-global").at().to_value()),
@@ -46,8 +56,14 @@ impl<'a, 'f, 'g> ScopeResolverGlobals<'a, 'f, 'g> {
                 .variables
                 .keys()
                 .map(|s| s.as_str().to_owned())
+                .chain(
+                    self.extra_globals
+                        .into_iter()
+                        .flat_map(|globals| globals.keys().cloned()),
+                )
                 .collect();
             names.sort();
+            names.dedup();
             names
         })
     }

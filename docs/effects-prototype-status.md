@@ -154,8 +154,10 @@ Method(name)
 Constant(repr)
 ```
 
-This is a test-oriented mechanism, not a native registration API. Summaries
-state whether a call may return and/or fail, plus guarded effects. A summary
+This is an analyzer-owned mechanism, not a native registration API. Tests can
+register summaries directly, and the exploratory CLI can load summaries from a
+JSON registry. Summaries state whether a call may return and/or fail, plus
+guarded effects. A summary
 effect can be guarded by:
 
 ```text
@@ -186,6 +188,71 @@ operation's eventual outcome.
 Arbitrary summary predicates, named-argument substitution, exported summary
 interfaces, and interprocedural Starlark summary computation are not
 implemented.
+
+### JSON summary registry
+
+Pass a registry to the source CLI with `--effects-summaries`:
+
+```console
+cargo run -p starlark_bin -- \
+  --effects \
+  --effects-summaries effects.json \
+  example.star
+```
+
+A registry can declare names that do not have runtime implementations. These
+names are installed as compile-only placeholder globals and are never executed.
+Configured names override ordinary globals for the analysis, allowing an
+existing host function such as `print` to receive a custom summary as well.
+
+```json
+{
+  "functions": {
+    "emit": {
+      "effects": [
+        {
+          "guard": "entered",
+          "host_effect": {
+            "name": "emit",
+            "arguments": [0]
+          }
+        }
+      ],
+      "may_return": true,
+      "may_fail": false
+    },
+    "read_clock": {
+      "effects": [
+        {
+          "observe_host": {
+            "name": "clock",
+            "arguments": []
+          }
+        }
+      ],
+      "may_return": true,
+      "may_fail": true
+    }
+  }
+}
+```
+
+`guard` is one of `entered`, `normal`, or `failure` and defaults to `entered`.
+`may_return` defaults to `true`; `may_fail` defaults to `false`. Available
+effect forms are:
+
+```json
+{"host_effect": {"name": "emit", "arguments": [0]}}
+{"observe_host": {"name": "clock", "arguments": []}}
+{"mutate_argument": {"target": 0, "mutation": {"append_argument": 1}}}
+{"mutate_argument": {"target": 0, "mutation": {"opaque": "change"}}}
+{"mutate_all": {"name": "unknown mutation"}}
+{"unknown": {"origin": "embedding-defined behavior"}}
+```
+
+Argument numbers are zero-based. The registry currently applies only to direct
+calls to configured global names. Aliases, methods, namespaced functions, and
+command-line definitions of arbitrary predicate guards are not supported.
 
 ## Regions
 
@@ -280,11 +347,21 @@ normal, return, and failure completions with rendered guards. Reports do not
 yet include source spans, function identities, effect-site identities, or loop
 occurrence identities.
 
-There is no command-line interface or public source-analysis entry point. The
-current way to experiment is to add a test in
-`starlark/src/eval/effects/tests.rs`, construct compiler IR, call
-`Analyzer::analyze`, and print `result.report()` with a test run using
-`--nocapture`.
+A source-level exploratory CLI is available through the repository's existing
+`starlark` binary. It compiles source to structured IR without executing it and
+prints reports for the module and each named function, including nested
+functions:
+
+```console
+cargo run -p starlark_bin -- --effects example.star
+cargo run -p starlark_bin -- --effects -e 'def f(x): return x'
+```
+
+The CLI accepts `--dialect standard` or `--dialect extended`. Loads are rejected
+because source analysis does not execute a loader. JSON call summaries can be
+supplied with `--effects-summaries` as described above. The analyzer's types and
+implementation remain crate-private; an opt-in, doc-hidden `effects-cli` feature
+exposes only the string-report bridge needed by `starlark_bin`.
 
 The tests currently cover:
 
@@ -298,12 +375,15 @@ The tests currently cover:
 * compiler-IR short-circuit guarding;
 * compiler-IR failure preventing a later effect;
 * compiler-IR branch continuation simplifying to an OR join;
-* visible conservative widening and deterministic report output for unsupported IR.
+* visible conservative widening and deterministic report output for unsupported IR;
+* source compilation and reporting for modules, functions, and nested functions;
+* module-region propagation, local return flow, and captured reads and writes;
+* JSON summary validation, placeholder host globals, host effects, and argument mutation.
 
 ## Deferred work
 
 Consistent with the prototype plan, the implementation does not include loops,
 effect families, interprocedural Starlark analysis, a stable native-summary API,
-the full region model, cancellation, or bytecode validation. The next useful
-usability step is a test-only source harness that exposes optimized
-`StmtsCompiled` to the analyzer, followed by compiler-level golden reports.
+the full region model, cancellation, or bytecode validation. Useful next steps for
+the source harness include richer summary predicates, load modeling, source
+spans in reports, and compiler-level golden files for larger programs.
